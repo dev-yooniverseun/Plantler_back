@@ -3,30 +3,16 @@ package com.plantler.controller;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import org.apache.tomcat.util.http.fileupload.UploadContext;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.InputStreamResource;
-import org.springframework.core.io.UrlResource;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.ui.Model;
-import org.springframework.validation.BindingResult;
-import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
@@ -40,8 +26,6 @@ import com.plantler.dto.ResultDTO;
 import com.plantler.mapper.KhBoardMapper;
 import com.plantler.service.KhBoardService;
 
-import io.micrometer.core.instrument.util.IOUtils;
-import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -52,7 +36,7 @@ import lombok.extern.slf4j.Slf4j;
 //@RequestMapping("/kh")
 public class KhBoardController {
 	
-	private final KhBoardMapper khb;
+	private final KhBoardMapper khbMapper;
 	private final JwtToken jwtToken;
 	
 	@GetMapping("/")
@@ -63,7 +47,7 @@ public class KhBoardController {
 	@GetMapping("/view")
     public ResponseEntity<?> view(@RequestParam("file_no") int file_no) {
 		try {
-			  FileDTO fileDTO = khb.findByFileNo(file_no);
+			  FileDTO fileDTO = khbMapper.findByFileNo(file_no);
 			  String url = fileDTO.getFile_server_name(); // 데이터베이스에서 file_no로 파일 정보 가져와서 아래 로직 적용
 		      String path = getRootPath().concat("\\upload\\").concat(url);
 		      File file = new File(path);
@@ -73,7 +57,7 @@ public class KhBoardController {
 		        .body(new InputStreamResource(new FileInputStream(file)));
 		    } catch (Exception e) {
 		      e.printStackTrace();
-		      return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+		      return ResponseEntity.notFound().build();
 		    }
     }
 	
@@ -89,18 +73,18 @@ public class KhBoardController {
 		boolean state = false;
 		
 		//게시판 목록
-		List<KhBoardDTO> khBoardList = khb.findAll();
+		List<KhBoardDTO> khBoardList = khbMapper.findAll();
 
 		//노하우 게시판 상단 랭킹
-		List<KhBoardDTO> khBoardRanks = khb.KhTop10ByBoardLikes(10); 
+		List<KhBoardDTO> khBoardRanks = khbMapper.KhTop10ByBoardLikes(10); 
 		
 		//파일 정보 추가 (게시판 랭킹용)
 		if(khBoardRanks != null && !khBoardRanks.isEmpty()) {
 			for (KhBoardDTO board : khBoardRanks) {
 				try {
-					FileDTO fileDTO = khb.findByFileNo(board.getBoard_no());
+					FileDTO fileDTO = khbMapper.findByFileNo(board.getBoard_no());
 					if (fileDTO != null) {
-						board.setFile_no(fileDTO.findByFileNoOne(1));
+						//board.setFile_no(fileDTO.findByFileNoOne(1));
 					}
 				} catch (Exception e) {
 					e.printStackTrace();
@@ -126,9 +110,13 @@ public class KhBoardController {
 	
 	@GetMapping("/khboarddetail/{board_no}")
 	public ResultDTO KhBoardDetail(@PathVariable("board_no") int board_no) {
-		KhBoardDTO khBoardDTO = khb.findByBoardNo(board_no);
+		 // 조회수 증가
+	    int countResult = khbMapper.boardCount(board_no);
+	    log.info("게시글 번호: {} 조회수 증가 결과: {}", board_no, countResult);
+		
+		KhBoardDTO khBoardDTO = khbMapper.findByBoardNo(board_no);
 		if(khBoardDTO != null) {
-			FileDTO fileDTO = khb.findByFileBoardNO(khBoardDTO.getBoard_no());
+			FileDTO fileDTO = khbMapper.findByFileBoardNO(khBoardDTO.getBoard_no());
 			if(fileDTO != null) {				
 				khBoardDTO.setFile_no(fileDTO.getFile_no());
 			}
@@ -144,7 +132,7 @@ public class KhBoardController {
 		
 		boolean state = true;
 		
-		CommentDTO commentDTO = khb.findByNo(comment_no);
+		CommentDTO commentDTO = khbMapper.findByNo(comment_no);
 		if(commentDTO == null) { // 값이 없을때 
 			state = false;
 			//commentDTO = new CommentDTO();
@@ -169,17 +157,17 @@ public class KhBoardController {
     }
 	
 	// 게시판 글 등록 (파일 포함) -----------------------------------------------------------------	
-		@PostMapping("/khc")
-		public ResultDTO khc(@RequestParam("file") MultipartFile multipartFile, 
-				@RequestParam("board_title") String board_title, 
-				@RequestParam("board_content") String board_content, 
-				@RequestParam("category_id") int category_id,
-				HttpServletRequest request) throws IOException {
-			// 서비스 이동하는 메소드 호출 >> 
-		
-			boolean state = false;
-			Object result = null;
-		
+	@PostMapping("/khboardregister")
+	public ResultDTO khboardRegister(@RequestParam(name="file", required = false) MultipartFile multipartFile, 
+			@RequestParam("board_title") String board_title, 
+			@RequestParam("board_content") String board_content, 
+			@RequestParam("category_id") int category_id,
+			HttpServletRequest request) throws IOException {
+		// 서비스 이동하는 메소드 호출 >> 
+	
+		boolean state = false;
+		Object result = null;
+	
 		try {
 			// Token 가져오기
 			String token =  request.getHeader("Authorization");
@@ -188,7 +176,7 @@ public class KhBoardController {
 				RequestTokenDTO requestTokenDTO = jwtToken.getUser(token);
 				String user_id = requestTokenDTO.getId();
 				System.out.println("user id: " + user_id);
-				int user_no = khb.findByUserId(user_id);
+				int user_no = khbMapper.findByUserId(user_id);
 				System.out.println("user no: " + user_no);
 				
 				// 1단 게시판 등록 도전!! >> 게시판 번호를 이용하여 파일 업로드쪽으로 가봅시다..
@@ -199,7 +187,7 @@ public class KhBoardController {
 						.user_no(user_no)
 						.build();
 				System.out.println("게시판 등록 되니?" + khBoardDTO);
-				if(khb.saveBoard(khBoardDTO) == 1) {
+				if(khbMapper.saveBoard(khBoardDTO) == 1) {
 					
 					// 2단계 파일 업로드 도전!!
 					int board_no = khBoardDTO.getBoard_no();
@@ -228,7 +216,7 @@ public class KhBoardController {
 		                File file = new File(path + "\\" + file_server_name);
 						multipartFile.transferTo(file);
 						// 파일 저장 완료!!
-						System.out.println("FILE UPLOADED SUCCESSFULLY");
+						System.out.println("FDILE UPLOADED SUCCESSFULLY");
 						
 						FileDTO fileDTO = FileDTO.builder()
 							.board_no(board_no)
@@ -240,7 +228,7 @@ public class KhBoardController {
 							.file_sort(file_sort)
 							.build();
 						
-						if( khb.saveFile(fileDTO) == 1) {
+						if( khbMapper.saveFile(fileDTO) == 1) {
 							// 파일 테이블 정상 입력 완료!!
 							System.out.println("FileDTO SAVED SUCCESSFULLY");
 							state = true;
@@ -249,19 +237,143 @@ public class KhBoardController {
 						
 					}
 				}
-				
+			
 			} 
-				
+			
 		}catch (Exception e) {
 				e.printStackTrace();
 				return ResultDTO.builder().state(false).msg("ERRROR").build();
 		}
 		
 		return ResultDTO.builder().state(state).result(result).build();
+	
+	}
+		
+// 여기서 부터 하기............
+		// 게시판 글 수정(지선생님이 도와주심.....................)
+		@PostMapping("/khboardupdate")
+		public ResultDTO KhBoardUpdate(
+				@RequestParam("board_no") int board_no,
+		        @RequestParam("board_title") String board_title,
+		        @RequestParam("board_content") String board_content,
+		        @RequestParam("category_id") int category_id,
+		        @RequestParam(name="file", required = false) MultipartFile multipartFile,
+		        HttpServletRequest request) {
 
+		    boolean state = false;
+		    Object result = null;
+
+		    try {
+		        // Token 가져오기
+		        String token = request.getHeader("Authorization");
+		        if (jwtToken.isValidToken(token)) {
+		            RequestTokenDTO requestTokenDTO = jwtToken.getUser(token);
+		            int user_no = khbMapper.findByUserId(requestTokenDTO.getId());
+
+		            // 게시글 수정 DTO 생성
+		            KhBoardDTO khBoardDTO = KhBoardDTO.builder()
+		                    .board_no(board_no)
+		                    .board_title(board_title)
+		                    .board_content(board_content)
+		                    .category_id(category_id)
+		                    .user_no(user_no)
+		                    .build();
+
+		            // 게시글 업데이트
+		            if (khbMapper.updateBoard(khBoardDTO) == 1) {
+		                state = true;
+
+		                // 파일 수정 로직
+		                if (multipartFile != null && !multipartFile.isEmpty()) {
+		                    // 파일 정보 생성
+		                    FileDTO fileDTO = new FileDTO();
+		                    String file_server_name = UUID.randomUUID().toString();
+		                    String file_name = multipartFile.getOriginalFilename();
+		                    String file_type = multipartFile.getContentType();
+		                    String file_extension = getFileExtension(file_name);
+		                    String file_url = file_server_name;
+		                    fileDTO.setFile_server_name(file_server_name);
+		                    fileDTO.setFile_name(file_name);
+		                    fileDTO.setFile_type(file_type);
+		                    fileDTO.setFile_url(file_url);
+		                    fileDTO.setFile_extension(file_extension);
+		                    fileDTO.setFile_sort(0);
+		                    fileDTO.setFile_no(khbMapper.findByFileBoardNO(board_no).getFile_no()); // 기존 파일 번호 가져오기
+
+		                    // 파일 저장
+		                    String dir = getRootPath() + "\\upload";
+		                    File directory = new File(dir);
+		                    if (!directory.exists()) {
+		                        directory.mkdirs();
+		                    }
+		                    File file = new File(dir + "\\" + file_server_name);
+		                    multipartFile.transferTo(file);
+
+		                    // 파일 업데이트
+		                    if (khbMapper.updateFile(fileDTO) == 1) {
+		                        state = true;
+		                    }
+		                }
+		                result = board_no; // 수정된 게시글 번호
+		            }
+		        }
+		    } catch (Exception e) {
+		        e.printStackTrace();
+		        return ResultDTO.builder().state(false).msg("ERROR").build();
+		    }
+
+		    return ResultDTO.builder().state(state).result(result).build();
+		}
+
+		// 게시글 삭제
+		@PostMapping("/khboarddelete/{board_no}")
+		public ResultDTO deleteBoard(@PathVariable("board_no") int board_no, HttpServletRequest request) {
+		    boolean state = false;
+		    try {
+		        // Token 가져오기
+		        String token = request.getHeader("Authorization");
+		        if (jwtToken.isValidToken(token)) {
+		        	
+		        	// 파일 정보 조회
+		            FileDTO fileDTO = khbMapper.findByFileBoardNO(board_no);
+		            if (fileDTO != null) {
+		                // 파일 삭제 (서버에서)
+		                String filePath = getRootPath() + "\\upload\\" + fileDTO.getFile_server_name();
+		                File file = new File(filePath);
+		                if (file.exists()) {
+		                    file.delete();
+		                }
+
+		                // 데이터베이스에서 파일 정보 삭제
+		                khbMapper.deleteFile(fileDTO.getFile_no());
+		            }
+		        	
+		            // 권한 검증 후 게시글 삭제 수행
+		            int result = khbMapper.deleteBoard(board_no);
+		            if (result == 1) {
+		                state = true; // 삭제 성공
+		            }
+		        }
+		    } catch (Exception e) {
+		        e.printStackTrace();
+		        return ResultDTO.builder().state(false).msg("ERROR").build();
+		    }
+		    return ResultDTO.builder().state(state).build();
 		}
 		
-
+		
+		
+		
+//				// 게시글 조회수(보류)
+//				@GetMapping("/khboarddetail/{board_no}")
+//				public void boardCount(int board_no) {
+//				    int result = khbMapper.boardCount(board_no);
+//				    log.info("게시글 번호: {} 조회수 증가", board_no);
+//				    if (result == 0) {
+//				        // 해당 게시물이 존재하지 않거나 업데이트 실패
+//				        throw new RuntimeException("게시글 조회수 업데이트 실패");
+//				    }
+//				}
 		
 	}
 

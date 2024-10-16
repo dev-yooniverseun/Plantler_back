@@ -22,8 +22,4 @@ public class FileDTO {
 //	file_regdate;
 //	file_moddate;
 //	private boolean file_delYN;
-	public int findByFileNoOne(int i) {
-		// TODO Auto-generated method stub
-		return 1;
-	}
 }
